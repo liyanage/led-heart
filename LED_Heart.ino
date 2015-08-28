@@ -20,6 +20,7 @@
 
 #define EEPROM_UNDEFINED_VALUE 255
 
+
 enum AnimationState {
   AnimationStateUndefined,
   AnimationStateInitialized,
@@ -45,11 +46,17 @@ void runAnimation(AnimationContext *animationContext);
 
 // Animation step functions
 void animationStepFunctionRainbow(uint8_t frameIndex, AnimationContext *animationContext);
+void animationStepFunctionRainbowCycle(uint8_t frameIndex, AnimationContext *animationContext);
+void animationStepFunctionInsideOut(uint8_t frameIndex, AnimationContext *animationContext);
+void animationStepFunctionFire2012(uint8_t frameIndex, AnimationContext *animationContext);
 void animationStepFunctionTheaterChaseRainbow(uint8_t frameIndex, AnimationContext *animationContext);
-void animationStepFunctionInnerToOuter(uint8_t frameIndex, AnimationContext *animationContext);
+//void animationStepFunctionInnerToOuter(uint8_t frameIndex, AnimationContext *animationContext);
 
 AnimationStepFunction kAllAnimationStepFunctions[] = {
   animationStepFunctionRainbow,
+  animationStepFunctionRainbowCycle,
+  animationStepFunctionInsideOut,
+  animationStepFunctionFire2012,
   animationStepFunctionTheaterChaseRainbow,
 //  animationStepFunctionInnerToOuter,
   NULL
@@ -57,7 +64,11 @@ AnimationStepFunction kAllAnimationStepFunctions[] = {
 
 unsigned long kAnimationStepFunctionFrameDelays[] = {
   25,
-  70
+  25,
+  30,
+  30,
+  60,
+  //25,
 };
   
 enum ButtonEventType {
@@ -81,6 +92,57 @@ enum State {
   StateRunningBrightnessAdjustment,
   StateRunningFlashlight,
 };
+
+unsigned int axisTopToBottom1[] = {   0,  1,      2,  3,     -1};
+unsigned int axisTopToBottom2[] = { 4,  5,  6,  7,  8,  9,   -1};
+unsigned int axisTopToBottom3[] = {10, 11, 12, 13, 14, 15,   -1};
+unsigned int axisTopToBottom4[] = {  16, 17, 18, 19, 20,     -1};
+unsigned int axisTopToBottom5[] = {    21, 22, 23, 24,       -1};
+unsigned int axisTopToBottom6[] = {      25, 26, 27,         -1};
+unsigned int axisTopToBottom7[] = {        28, 29,           -1};
+unsigned int axisTopToBottom8[] = {          30,             -1};
+
+unsigned int *axisTopToBottom[] = {
+  axisTopToBottom1,
+  axisTopToBottom2,
+  axisTopToBottom3,
+  axisTopToBottom4,
+  axisTopToBottom5,
+  axisTopToBottom6,
+  axisTopToBottom7,
+  axisTopToBottom8,
+  NULL  
+};
+
+unsigned int *axisBottomToTop[] = {
+  axisTopToBottom8,
+  axisTopToBottom7,
+  axisTopToBottom6,
+  axisTopToBottom5,
+  axisTopToBottom4,
+  axisTopToBottom3,
+  axisTopToBottom2,
+  axisTopToBottom1,
+  NULL  
+};
+
+
+unsigned int axisInsideToOutside1[] = {5, 8, 11, 14, 17, 19, 22, 23, 26, -1};
+unsigned int axisInsideToOutside2[] = {0, 1, 2, 3, 4, 6, 7, 9, 10, 12, 13, 15, 16, 18, 20, 21, 24, 25, 27, 28, 29, 30, -1};
+
+unsigned int *axisInsideToOutside[] = {
+  axisInsideToOutside1,
+  axisInsideToOutside2,
+  NULL  
+};
+
+unsigned int *axisOutsideToInside[] = {
+  axisInsideToOutside2,
+  axisInsideToOutside1,
+  NULL  
+};
+
+
 
 CRGB leds[LED_COUNT];
 AnimationContext gAnimationContext;
@@ -349,12 +411,22 @@ void advanceAnimation(AnimationContext *animationContext) {
 
 // Animation step functions
 
+// -------------------------
 void animationStepFunctionRainbow(uint8_t frameIndex, AnimationContext *animationContext) {
     for (int i = 0; i < animationContext->ledCount; i++) {
         animationContext->leds[i] = colorWheel((i + frameIndex) & 255);
     }
 }
 
+// -------------------------
+// Slightly different, this makes the rainbow equally distributed throughout
+void animationStepFunctionRainbowCycle(uint8_t frameIndex, AnimationContext *animationContext) {
+    for (int i = 0; i < animationContext->ledCount; i++)  {
+        animationContext->leds[i] = colorWheel(((i * 256 / animationContext->ledCount) + frameIndex) & 255);
+    }
+}
+
+// -------------------------
 // Theatre-style crawling lights with rainbow effect
 void animationStepFunctionTheaterChaseRainbow(uint8_t frameIndex, AnimationContext *animationContext) {
     const uint8_t offset = frameIndex % 3;
@@ -367,6 +439,8 @@ void animationStepFunctionTheaterChaseRainbow(uint8_t frameIndex, AnimationConte
     }
 }
 
+// -------------------------
+/*
 typedef struct {
   int initialized; 
   CRGB color;
@@ -412,6 +486,85 @@ void animationStepFunctionInnerToOuter(uint8_t frameIndex, AnimationContext *ani
         leds[pixel] = ringIndex == 2 ? p->color : CRGB::Black;
     }
 }
+*/
+
+// -------------------------
+// from https://github.com/FastLED/FastLED/blob/master/examples/Fire2012/Fire2012.ino
+
+// COOLING: How much does the air cool as it rises?
+// Less cooling = taller flames.  More cooling = shorter flames.
+// Default 50, suggested range 20-100 
+#define COOLING  80
+
+// SPARKING: What chance (out of 255) is there that a new spark will be lit?
+// Higher chance = more roaring fire.  Lower chance = more flickery fire.
+// Default 120, suggested range 50-200.
+#define SPARKING 50
+
+#define HEAT_CELL_COUNT 8
+
+void animationStepFunctionFire2012(uint8_t frameIndex, AnimationContext *animationContext) {
+  random16_add_entropy(random());
+
+  int heatCellCount = HEAT_CELL_COUNT;
+  
+  // Array of temperature readings at each simulation cell
+  static byte heat[HEAT_CELL_COUNT];
+
+  // Step 1.  Cool down every cell a little
+    for (int i = 0; i < heatCellCount; i++) {
+      heat[i] = qsub8( heat[i],  random8(0, ((COOLING * 10) / heatCellCount) + 2));
+    }
+  
+    // Step 2.  Heat from each cell drifts 'up' and diffuses a little
+    for (int k = heatCellCount - 1; k >= 2; k--) {
+      heat[k] = (heat[k - 1] + heat[k - 2] + heat[k - 2]) / 3;
+    }
+    
+    // Step 3.  Randomly ignite new 'sparks' of heat near the bottom
+    if (random8() < SPARKING) {
+      int y = random8(3);
+      heat[y] = qadd8(heat[y], random8(160, 255));
+    }
+
+    // Step 4.  Map from heat cells to LED colors
+//    for (int j = 0; j < LED_COUNT; j++) {
+//        animationContext->leds[j] = HeatColor(heat[j]);
+//    }
+
+    for (int i = 0; i < heatCellCount; i++) {
+      unsigned int *group = axisBottomToTop[i];
+      unsigned int j = 0;
+      CRGB groupColor = HeatColor(heat[i]);
+      while (group[j] != -1) {
+        animationContext->leds[group[j]] = groupColor;
+        j++;
+      }
+    }
+}
+
+
+// -------------------------
+void animationStepFunctionInsideOut(uint8_t frameIndex, AnimationContext *animationContext) {
+  uint8_t saturation = 255 - scale8(cubicwave8(frameIndex), 175);
+  CHSV color = CHSV(0, saturation, 254);
+  unsigned int *group = axisInsideToOutside[0];
+  int i = 0;
+  while (group[i] != -1) {
+    animationContext->leds[group[i]] = color;
+    i++;
+  }
+
+  saturation = 255 - scale8(cubicwave8(frameIndex + 25), 175);
+  color = CHSV(0, saturation, 254);
+  group = axisInsideToOutside[1];
+  i = 0;
+  while (group[i] != -1) {
+    animationContext->leds[group[i]] = color;
+    i++;
+  }
+}
+
 
 
 
@@ -431,3 +584,12 @@ CRGB colorWheel(byte wheelPos) {
         return CRGB(wheelPos * 3, 255 - wheelPos * 3, 0);
     }
 }
+
+int ledGroupCountInAnimationAxis(unsigned int *animationAxis[]) {
+  int count = 0;
+  while (animationAxis[count]) {
+    count++;
+  }
+  return count;
+}
+
